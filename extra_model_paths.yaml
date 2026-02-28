@@ -1,8 +1,10 @@
 runpod_network_volume:
     base_path: /runpod-volume/models/
     
-    # 이렇게 배열로 묶어주면 clip 폴더와 text_encoders 폴더 양쪽을 모두 탐색합니다.
-    clip: [clip/, text_encoders/] 
+    # 배열 기호([])를 빼고 파이프(|) 기호를 사용해 줄바꿈으로 경로를 나열합니다.
+    clip: |
+        clip/
+        text_encoders/
     
     diffusion_models: diffusion_models/
     text_encoders: text_encoders/
