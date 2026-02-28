@@ -3,8 +3,7 @@ set -e
 
 echo "[startup] H200 WAN 2.2 I2V + RIFE Worker Initialization"
 
-# ── RIFE49 모델 심볼릭 링크 (대소문자 문제 방지) ──
-# Docker 빌드 시 구워둔 모델을 노드가 인식할 수 있도록 처리
+# ── 1. RIFE49 모델 심볼릭 링크 ──
 BAKED_RIFE="/comfyui/custom_nodes/ComfyUI-Frame-Interpolation/vfi_models/rife/rife49.pth"
 RIFE_UPPER_DIR="/comfyui/custom_nodes/ComfyUI-Frame-Interpolation/vfi_models/RIFE"
 
@@ -14,12 +13,35 @@ if [ -f "$BAKED_RIFE" ]; then
     echo "[startup] ✓ Baked RIFE49 ready."
 fi
 
-# ── 네트워크 볼륨 마운트 확인 ──
-if [ -d "/runpod-volume/models" ]; then
+# ── 2. 네트워크 볼륨 확인 및 로컬 NVMe 캐싱 (핵심 최적화) ──
+NET_VOL="/runpod-volume/models"
+LOCAL_MODELS="/comfyui/models"
+
+if [ -d "$NET_VOL" ]; then
     echo "[startup] ✓ Network volume mounted."
+    
+    # 캐싱할 로컬 디렉토리 생성
+    mkdir -p "$LOCAL_MODELS/diffusion_models"
+    mkdir -p "$LOCAL_MODELS/clip"
+    
+    echo "[startup] ⚡ Caching heavy models to local NVMe..."
+    # 💡 팁: S3 직접 다운로드(s5cmd)가 가능하다면 cp 대신 s5cmd를 쓰면 3~5배 더 빠릅니다.
+    # 여기서는 네트워크 볼륨에서 컨테이너 로컬로 복사하여 I/O 병목을 제거합니다.
+    
+    # Wan 2.2 UNET 캐싱
+    if [ ! -f "$LOCAL_MODELS/diffusion_models/wan22_i2vHighV21.safetensors" ]; then
+        cp "$NET_VOL/diffusion_models/wan22_i2vHighV21.safetensors" "$LOCAL_MODELS/diffusion_models/"
+        echo "  - wan22_i2vHighV21.safetensors cached."
+    fi
+    
+    # UMT5_XXL 캐싱
+    if [ ! -f "$LOCAL_MODELS/clip/umt5_xxl_fp16.safetensors" ]; then
+        cp "$NET_VOL/clip/umt5_xxl_fp16.safetensors" "$LOCAL_MODELS/clip/"
+        echo "  - umt5_xxl_fp16.safetensors cached."
+    fi
+    
 else
     echo "[startup] ✗ FATAL: /runpod-volume/models NOT found! Models are missing."
-    # 볼륨이 없으면 ComfyUI가 모델을 찾지 못해 터지므로 경고를 띄웁니다.
 fi
 
 echo "[startup] Starting handler.py ..."
