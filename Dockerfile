@@ -25,7 +25,7 @@ WORKDIR ${COMFY_DIR}
 # ── ComfyUI core dependencies ─────────────────────────────────
 RUN python3 -m pip install --no-cache-dir -r requirements.txt
 
-# ── RunPod + handler dependencies ─────────────────────────────
+# ── RunPod + handler dependencies ──
 RUN python3 -m pip install --no-cache-dir \
     runpod \
     websocket-client \
@@ -33,7 +33,8 @@ RUN python3 -m pip install --no-cache-dir \
     Pillow \
     "imageio[ffmpeg]" \
     av \
-    typing_extensions
+    typing_extensions \
+    cloudinary
 
 # ── Custom Nodes (H200 전용: I2V 및 VFI 관련 노드만 남김) ──
 # [1] VideoHelperSuite
