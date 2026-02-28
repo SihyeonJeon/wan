@@ -20,73 +20,119 @@ COMFY_DIR  = os.environ.get("COMFY_DIR", "/comfyui")
 STARTUP_TIMEOUT   = int(os.environ.get("STARTUP_TIMEOUT", 300))
 EXECUTION_TIMEOUT = int(os.environ.get("EXECUTION_TIMEOUT", 2400))
 
-# Cloudinary 설정 (RunPod Environment Variables에서 CLOUDINARY_URL을 읽어옵니다)
-# 예: CLOUDINARY_URL=cloudinary://API_KEY:API_SECRET@CLOUD_NAME
-cloudinary.config(secure=True)
+# ── Cloudinary 하드코딩 설정 ──────────────────────────────────
+cloudinary.config(
+    cloud_name="dp2azbanc",
+    api_key="132448188878379",
+    api_secret="uKoaFbyATfGBdc1RdihQqhwySvE",
+    secure=True
+)
 
 comfy_process = None
 
 def log(msg: str):
     print(f"[handler] {msg}", flush=True)
 
-# (start_comfyui, wait_for_comfyui, upload_image_to_comfyui, queue_prompt, wait_for_execution 함수는 기존과 동일하게 유지)
-
-# ── Output retrieval & Cloudinary Upload ──────────────────────
-def get_and_upload_outputs(prompt_id: str):
-    """
-    ComfyUI 출력 폴더에서 직접 파일을 읽어 Cloudinary에 업로드하고 URL만 반환합니다.
-    Base64 인코딩/디코딩 오버헤드를 완전히 제거합니다.
-    """
-    history = json.loads(
-        urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=30).read()
+# ── ComfyUI lifecycle (기존과 동일) ───────────────────────────
+def upload_image_to_comfyui(name: str, url: str) -> str:
+    import io
+    from PIL import Image
+    log(f"Downloading image: {url[:80]}")
+    img_bytes = urllib.request.urlopen(url, timeout=30).read()
+    img = Image.open(io.BytesIO(img_bytes))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    img_bytes = buf.getvalue()
+    upload_name = name.rsplit(".", 1)[0] + ".png"
+    boundary = "----ComfyBoundary"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="image"; filename="{upload_name}"\r\n'
+        f"Content-Type: image/png\r\n\r\n"
+    ).encode() + img_bytes + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(
+        f"{COMFY_URL}/upload/image", data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
     )
-    if prompt_id not in history:
-        raise RuntimeError(f"Prompt {prompt_id} not found in history")
+    resp = json.loads(urllib.request.urlopen(req, timeout=30).read())
+    return resp.get("name", upload_name)
 
-    outputs = history[prompt_id].get("outputs", {})
+def start_comfyui():
+    global comfy_process
+    cmd = [
+        sys.executable, "main.py", "--listen", "0.0.0.0", "--port", str(COMFY_PORT),
+        "--disable-auto-launch", "--extra-model-paths-config", f"{COMFY_DIR}/extra_model_paths.yaml", "--bf16-unet"
+    ]
+    comfy_process = subprocess.Popen(cmd, cwd=COMFY_DIR)
+
+def wait_for_comfyui() -> bool:
+    start, interval = time.time(), 3
+    while time.time() - start < STARTUP_TIMEOUT:
+        if comfy_process and comfy_process.poll() is not None:
+            return False
+        try:
+            urllib.request.urlopen(f"{COMFY_URL}/system_stats", timeout=5)
+            return True
+        except:
+            time.sleep(interval)
+    return False
+
+def queue_prompt(workflow: dict, client_id: str) -> dict:
+    payload = json.dumps({"prompt": workflow, "client_id": client_id}).encode()
+    req = urllib.request.Request(f"{COMFY_URL}/prompt", data=payload, headers={"Content-Type": "application/json"})
+    return json.loads(urllib.request.urlopen(req, timeout=30).read())
+
+def wait_for_execution(prompt_id: str, client_id: str):
+    import websocket
+    ws = websocket.create_connection(f"ws://{COMFY_HOST}:{COMFY_PORT}/ws?clientId={client_id}", timeout=EXECUTION_TIMEOUT)
+    try:
+        deadline = time.time() + EXECUTION_TIMEOUT
+        while time.time() < deadline:
+            try: raw = ws.recv()
+            except websocket.WebSocketTimeoutException: continue
+            if not isinstance(raw, str): continue
+            msg = json.loads(raw)
+            if msg.get("type") == "executing" and msg["data"].get("node") is None and msg["data"].get("prompt_id") == prompt_id:
+                return
+            elif msg.get("type") == "execution_error":
+                raise RuntimeError(f"Node error: {msg['data'].get('exception_message')}")
+        raise TimeoutError("Execution timed out")
+    finally:
+        ws.close()
+
+# ── Cloudinary Direct Upload ──────────────────────────────────
+def get_and_upload_outputs(prompt_id: str):
+    history = json.loads(urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=30).read())
+    outputs = history.get(prompt_id, {}).get("outputs", {})
     video_urls = []
 
     for node_id, node_out in outputs.items():
-        # VHS 노드는 보통 "gifs" 또는 "videos" 키로 출력 정보를 넘깁니다.
         for vkey in ("videos", "gifs"):
             for vid_info in node_out.get(vkey, []):
-                if vid_info.get("type") == "temp":
-                    continue
+                if vid_info.get("type") == "temp": continue
                 
                 fname = vid_info.get("filename", "")
                 subfolder = vid_info.get("subfolder", "")
-                if not fname:
-                    continue
+                if not fname: continue
 
-                # 1. ComfyUI 로컬 디스크에서 다이렉트로 파일 경로 구성
                 local_file_path = os.path.join(COMFY_DIR, "output", subfolder, fname)
-                
-                if not os.path.exists(local_file_path):
-                    log(f"WARNING: File not found on disk -> {local_file_path}")
-                    continue
+                if not os.path.exists(local_file_path): continue
 
-                # 2. Cloudinary 다이렉트 업로드 (스트리밍 업로드)
-                log(f"Uploading to Cloudinary: {fname} ({os.path.getsize(local_file_path)//1024} KB)")
+                log(f"Uploading to Cloudinary [Preset: n8n insta]: {fname}")
                 upload_resp = cloudinary.uploader.upload(
                     local_file_path,
                     resource_type="video",
-                    folder="wan22_i2v_outputs", # Cloudinary 내 폴더명
-                    chunk_size=6000000          # 대용량 비디오를 위한 청크 업로드(6MB)
+                    upload_preset="n8n insta", # 요청하신 프리셋 하드코딩
+                    chunk_size=6000000
                 )
                 
                 video_url = upload_resp.get("secure_url")
-                log(f"Upload Complete! URL: {video_url}")
+                video_urls.append({"filename": fname, "url": video_url})
                 
-                video_urls.append({
-                    "filename": fname,
-                    "url": video_url
-                })
-
-                # 3. 업로드 완료 후 로컬 파일 삭제 (H200 디스크 공간 확보 및 I/O 최적화)
-                try:
-                    os.remove(local_file_path)
-                except Exception as e:
-                    log(f"Failed to remove local file: {e}")
+                # 워커 디스크 정리
+                try: os.remove(local_file_path)
+                except Exception as e: log(f"Cleanup failed: {e}")
 
     return video_urls
 
@@ -95,46 +141,30 @@ def handler(event: dict) -> dict:
     try:
         job_input = event.get("input", {})
         workflow  = job_input.get("workflow")
-        if not workflow:
-            return {"error": "No 'workflow' key in input"}
+        if not workflow: return {"error": "No workflow provided"}
 
-        # 이전 단계(싼 GPU)에서 만든 Z-Image의 URL을 받아 ComfyUI에 주입
+        # n8n에서 넘겨준 이미지 URL 처리 및 Node 10 맵핑
         for img_entry in job_input.get("images", []):
-            name = img_entry.get("name", "input_image.png")
-            url  = img_entry.get("image", "")
+            url = img_entry.get("image", "")
             if url:
-                actual_name = upload_image_to_comfyui(name, url)
-                # LoadImage 노드를 찾아서 파일명 업데이트
-                for node_id, node_data in workflow.items():
-                    if node_data.get("class_type") == "LoadImage":
-                        node_data["inputs"]["image"] = actual_name
-                        break # 하나만 처리한다고 가정
+                actual_name = upload_image_to_comfyui(img_entry.get("name", "input_image.png"), url)
+                if "10" in workflow and workflow["10"].get("class_type") == "LoadImage":
+                    workflow["10"]["inputs"]["image"] = actual_name
 
         client_id = str(uuid.uuid4())
-        log(f"Queuing prompt (client={client_id})")
-
-        result    = queue_prompt(workflow, client_id)
+        result = queue_prompt(workflow, client_id)
         prompt_id = result.get("prompt_id")
-        if not prompt_id:
-            return {"error": f"Failed to queue: {result}"}
-
-        log(f"Prompt ID: {prompt_id}")
+        
         wait_for_execution(prompt_id, client_id)
-
-        # Base64 대신 Cloudinary URL 리스트 반환
         video_results = get_and_upload_outputs(prompt_id)
         
-        if not video_results:
-            return {"error": "No videos generated or uploaded"}
-
-        return {
-            "status": "success",
-            "video_count": len(video_results),
-            "videos": video_results
-        }
+        if not video_results: return {"error": "No videos generated"}
+        return {"status": "success", "video_count": len(video_results), "videos": video_results}
 
     except Exception:
-        log(f"Handler exception:\n{traceback.format_exc()}")
         return {"error": traceback.format_exc()}
 
-# (Entry point __main__ 부분은 기존과 동일하게 유지)
+if __name__ == "__main__":
+    start_comfyui()
+    if not wait_for_comfyui(): sys.exit(1)
+    runpod.serverless.start({"handler": handler})
