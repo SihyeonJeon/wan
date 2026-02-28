@@ -60,9 +60,13 @@ def upload_image_to_comfyui(name: str, url: str) -> str:
 
 def start_comfyui():
     global comfy_process
+    # H200 최적화: --highvram 추가 (메모리 해제 없이 유지하여 Warm Start 시 0초 로딩)
+    #             --bf16-unet 추가 (5090/H200 필수)
     cmd = [
         sys.executable, "main.py", "--listen", "0.0.0.0", "--port", str(COMFY_PORT),
-        "--disable-auto-launch", "--extra-model-paths-config", f"{COMFY_DIR}/extra_model_paths.yaml", "--bf16-unet"
+        "--disable-auto-launch", 
+        "--extra-model-paths-config", f"{COMFY_DIR}/extra_model_paths.yaml", 
+        "--bf16-unet", "--highvram" 
     ]
     comfy_process = subprocess.Popen(cmd, cwd=COMFY_DIR)
 
