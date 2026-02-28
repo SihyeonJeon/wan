@@ -1,9 +1,11 @@
 runpod_network_volume:
     base_path: /runpod-volume/models/
     
-    # WAN 2.2 I2V 전용 모델들 (Network Volume에 위치)
-    diffusion_models: diffusion_models/   # wan22_i2v_fp8.safetensors 등
-    text_encoders: text_encoders/         # umt5_xxl_fp16.safetensors
-    clip_vision: clip_vision/             # clip_vision_h.safetensors
-    vae: vae/                             # Wan2.1_VAE.pth
-    loras: loras/                         # lightx2v 등 4-step LoRA
+    # 이렇게 배열로 묶어주면 clip 폴더와 text_encoders 폴더 양쪽을 모두 탐색합니다.
+    clip: [clip/, text_encoders/] 
+    
+    diffusion_models: diffusion_models/
+    text_encoders: text_encoders/
+    clip_vision: clip_vision/
+    vae: vae/
+    loras: loras/
