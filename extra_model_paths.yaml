@@ -1,11 +1,13 @@
 runpod_network_volume:
     base_path: /runpod-volume/models/
-    
-    # 여러 경로가 필요할 경우, 가장 상위 디렉토리를 지정하거나 
-    # ComfyUI 기본 구조에 맞춰 단일 경로로 작성하는 것이 안전합니다.
     clip: clip/
     diffusion_models: diffusion_models/
     text_encoders: text_encoders/
     clip_vision: clip_vision/
     vae: vae/
     loras: loras/
+
+local_cached_volume:
+    base_path: /comfyui/models/
+    clip: clip/
+    diffusion_models: diffusion_models/
