@@ -6,6 +6,7 @@ import time
 import traceback
 import urllib.request
 import uuid
+import base64
 
 import runpod
 import cloudinary
@@ -33,7 +34,7 @@ comfy_process = None
 def log(msg: str):
     print(f"[handler] {msg}", flush=True)
 
-# ── ComfyUI lifecycle (기존과 동일) ───────────────────────────
+# ── ComfyUI lifecycle ───────────────────────────
 def upload_image_to_comfyui(name: str, url: str) -> str:
     import io
     from PIL import Image
@@ -60,8 +61,7 @@ def upload_image_to_comfyui(name: str, url: str) -> str:
 
 def start_comfyui():
     global comfy_process
-    # H200 최적화: --highvram 추가 (메모리 해제 없이 유지하여 Warm Start 시 0초 로딩)
-    #             --bf16-unet 추가 (5090/H200 필수)
+    # H200 최적화: --highvram 추가, --bf16-unet 추가
     cmd = [
         sys.executable, "main.py", "--listen", "0.0.0.0", "--port", str(COMFY_PORT),
         "--disable-auto-launch", 
@@ -105,13 +105,16 @@ def wait_for_execution(prompt_id: str, client_id: str):
     finally:
         ws.close()
 
-# ── Cloudinary Direct Upload ──────────────────────────────────
+# ── Output Processing (Video to Cloudinary, Image to Base64) ──
 def get_and_upload_outputs(prompt_id: str):
     history = json.loads(urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=30).read())
     outputs = history.get(prompt_id, {}).get("outputs", {})
+    
     video_urls = []
+    image_results = []
 
     for node_id, node_out in outputs.items():
+        # 1. 비디오/GIF 처리 (기존 로직: Cloudinary 업로드)
         for vkey in ("videos", "gifs"):
             for vid_info in node_out.get(vkey, []):
                 if vid_info.get("type") == "temp": continue
@@ -123,22 +126,45 @@ def get_and_upload_outputs(prompt_id: str):
                 local_file_path = os.path.join(COMFY_DIR, "output", subfolder, fname)
                 if not os.path.exists(local_file_path): continue
 
-                log(f"Uploading to Cloudinary [Preset: n8n insta]: {fname}")
+                log(f"Uploading Video to Cloudinary [Preset: n8n insta]: {fname}")
                 upload_resp = cloudinary.uploader.upload(
                     local_file_path,
                     resource_type="video",
-                    upload_preset="n8n insta", # 요청하신 프리셋 하드코딩
+                    upload_preset="n8n insta",
                     chunk_size=6000000
                 )
                 
-                video_url = upload_resp.get("secure_url")
-                video_urls.append({"filename": fname, "url": video_url})
+                video_urls.append({"filename": fname, "url": upload_resp.get("secure_url")})
                 
-                # 워커 디스크 정리
                 try: os.remove(local_file_path)
                 except Exception as e: log(f"Cleanup failed: {e}")
 
-    return video_urls
+        # 2. 이미지 처리 (추가 로직: n8n으로 전달할 Base64 생성)
+        for img_info in node_out.get("images", []):
+            if img_info.get("type") == "temp": continue
+            
+            fname = img_info.get("filename", "")
+            subfolder = img_info.get("subfolder", "")
+            if not fname: continue
+
+            local_file_path = os.path.join(COMFY_DIR, "output", subfolder, fname)
+            if not os.path.exists(local_file_path): continue
+
+            log(f"Encoding Image to Base64: {fname}")
+            with open(local_file_path, "rb") as f:
+                img_bytes = f.read()
+                b64_data = base64.b64encode(img_bytes).decode('utf-8')
+
+            # n8n의 Split Out Images 노드가 요구하는 형태로 배열 구성
+            image_results.append({
+                "filename": fname,
+                "data": b64_data
+            })
+            
+            try: os.remove(local_file_path)
+            except Exception as e: log(f"Cleanup failed: {e}")
+
+    return video_urls, image_results
 
 # ── RunPod handler ────────────────────────────────────────────
 def handler(event: dict) -> dict:
@@ -147,7 +173,7 @@ def handler(event: dict) -> dict:
         workflow  = job_input.get("workflow")
         if not workflow: return {"error": "No workflow provided"}
 
-        # n8n에서 넘겨준 이미지 URL 처리 및 Node 10 맵핑
+        # n8n에서 넘겨준 이미지 URL 처리 (Node 10 등 맵핑)
         for img_entry in job_input.get("images", []):
             url = img_entry.get("image", "")
             if url:
@@ -160,10 +186,24 @@ def handler(event: dict) -> dict:
         prompt_id = result.get("prompt_id")
         
         wait_for_execution(prompt_id, client_id)
-        video_results = get_and_upload_outputs(prompt_id)
         
-        if not video_results: return {"error": "No videos generated"}
-        return {"status": "success", "video_count": len(video_results), "videos": video_results}
+        # 결과물 가져오기
+        video_results, image_results = get_and_upload_outputs(prompt_id)
+        
+        if not video_results and not image_results: 
+            return {"error": "No videos or images generated"}
+        
+        # n8n을 위한 응답 구성
+        response = {"status": "success"}
+        if video_results:
+            response["video_count"] = len(video_results)
+            response["videos"] = video_results
+        
+        if image_results:
+            response["image_count"] = len(image_results)
+            response["images"] = image_results # n8n의 "output.images"로 매핑됨
+            
+        return response
 
     except Exception:
         return {"error": traceback.format_exc()}
