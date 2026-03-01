@@ -37,6 +37,30 @@ RUN python3 -m pip install --no-cache-dir \
     cloudinary
 
 # ── Custom Nodes (H200 전용: I2V 및 VFI 관련 노드만 남김) ──
+
+# [1] rgthree — SetNode/GetNode, Fast Groups Bypasser
+RUN cd ${COMFY_DIR}/custom_nodes && \
+    git clone https://github.com/rgthree/rgthree-comfy.git && \
+    (cd rgthree-comfy && python3 -m pip install --no-cache-dir -r requirements.txt 2>/dev/null || true)
+
+# [2] ComfyUI-Custom-Scripts (pysssss)
+RUN cd ${COMFY_DIR}/custom_nodes && \
+    git clone https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git
+
+# [3] ComfyUI-Easy-Use
+RUN cd ${COMFY_DIR}/custom_nodes && \
+    git clone https://github.com/yolain/ComfyUI-Easy-Use.git && \
+    (cd ComfyUI-Easy-Use && python3 -m pip install --no-cache-dir -r requirements.txt 2>/dev/null || true)
+
+# [4] ComfyUI_Comfyroll_CustomNodes
+RUN cd ${COMFY_DIR}/custom_nodes && \
+    git clone https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes.git
+
+# [5] ComfyUI-KJNodes
+RUN cd ${COMFY_DIR}/custom_nodes && \
+    git clone https://github.com/kijai/ComfyUI-KJNodes.git && \
+    (cd ComfyUI-KJNodes && python3 -m pip install --no-cache-dir -r requirements.txt 2>/dev/null || true)
+
 # [1] VideoHelperSuite
 RUN cd ${COMFY_DIR}/custom_nodes && \
     git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git && \
