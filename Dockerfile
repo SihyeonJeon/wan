@@ -16,7 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git wget curl ffmpeg \
     libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
-
+    
+RUN python3 -m pip install --no-cache-dir --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 # ── Clone latest ComfyUI ──────────────────────────────────────
 RUN git clone https://github.com/Comfy-Org/ComfyUI.git ${COMFY_DIR}
 WORKDIR ${COMFY_DIR}
