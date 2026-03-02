@@ -13,7 +13,7 @@ if [ -f "$BAKED_RIFE" ]; then
     echo "[startup] ✓ Baked RIFE49 ready."
 fi
 
-# ── 2. 네트워크 볼륨 확인 및 로컬 NVMe 캐싱 ──
+# ── 2. 네트워크 볼륨 연동 (Fast Cold Start 최적화) ──
 NET_VOL="/runpod-volume/models"
 LOCAL_MODELS="/comfyui/models"
 
@@ -22,36 +22,31 @@ if [ -d "$NET_VOL" ]; then
     
     mkdir -p "$LOCAL_MODELS/diffusion_models"
     mkdir -p "$LOCAL_MODELS/clip"
-    mkdir -p "$LOCAL_MODELS/checkpoints" # 이미지 모델용 디렉토리
+    mkdir -p "$LOCAL_MODELS/checkpoints"
     
-    echo "[startup] ⚡ Caching heavy models to local NVMe..."
+    echo "[startup] ⚡ Symlinking heavy models (Skipping NVMe copy for speed)..."
     
-    # [비디오] Wan 2.2 UNET 캐싱
-    if [ ! -f "$LOCAL_MODELS/diffusion_models/wan22_i2vHighV21.safetensors" ]; then
-        if [ -f "$NET_VOL/diffusion_models/wan22_i2vHighV21.safetensors" ]; then
-            cp "$NET_VOL/diffusion_models/wan22_i2vHighV21.safetensors" "$LOCAL_MODELS/diffusion_models/"
-            echo "  - wan22_i2vHighV21.safetensors cached."
-        fi
+    # [비디오] Wan 2.2 UNET 심볼릭 링크 (0.1초 소요)
+    if [ -f "$NET_VOL/diffusion_models/wan22_i2vHighV21.safetensors" ]; then
+        ln -sf "$NET_VOL/diffusion_models/wan22_i2vHighV21.safetensors" "$LOCAL_MODELS/diffusion_models/wan22_i2vHighV21.safetensors"
+        echo "  - wan22_i2vHighV21.safetensors linked."
     fi
     
-    # [비디오] UMT5_XXL 캐싱
-    if [ ! -f "$LOCAL_MODELS/clip/umt5_xxl_fp16.safetensors" ]; then
-        if [ -f "$NET_VOL/clip/umt5_xxl_fp16.safetensors" ]; then
-            cp "$NET_VOL/clip/umt5_xxl_fp16.safetensors" "$LOCAL_MODELS/clip/"
-            echo "  - umt5_xxl_fp16.safetensors cached."
-        fi
+    # [비디오] UMT5_XXL 심볼릭 링크
+    if [ -f "$NET_VOL/clip/umt5_xxl_fp16.safetensors" ]; then
+        ln -sf "$NET_VOL/clip/umt5_xxl_fp16.safetensors" "$LOCAL_MODELS/clip/umt5_xxl_fp16.safetensors"
+        echo "  - umt5_xxl_fp16.safetensors linked."
     fi
 
-    # [이미지] Image Generation 전용 모델 캐싱 (예: SDXL / Flux - 사용하는 파일명으로 수정 필요)
-    # if [ ! -f "$LOCAL_MODELS/checkpoints/your_image_model.safetensors" ]; then
-    #     if [ -f "$NET_VOL/checkpoints/your_image_model.safetensors" ]; then
-    #         cp "$NET_VOL/checkpoints/your_image_model.safetensors" "$LOCAL_MODELS/checkpoints/"
-    #         echo "  - your_image_model.safetensors cached."
-    #     fi
+    # [이미지] Image Generation 전용 모델 심볼릭 링크 (필요 시 주석 해제)
+    # if [ -f "$NET_VOL/checkpoints/your_image_model.safetensors" ]; then
+    #     ln -sf "$NET_VOL/checkpoints/your_image_model.safetensors" "$LOCAL_MODELS/checkpoints/your_image_model.safetensors"
+    #     echo "  - your_image_model.safetensors linked."
     # fi
     
 else
-    echo "[startup] ✗ FATAL: /runpod-volume/models NOT found! Models are missing."
+    # 볼륨이 안 붙었을 때 워커가 아예 죽어버리는 것을 방지하기 위해 FATAL 대신 경고만 띄움
+    echo "[startup] ✗ WARNING: /runpod-volume/models NOT found! Models are missing."
 fi
 
 echo "[startup] Starting handler.py ..."
