@@ -3,9 +3,8 @@
 # Pipeline: Image Generation (n8n Base64) + Video (WAN 2.2 I2V)
 # GPU Target: H200 / A100 80GB
 # Base: runpod/pytorch 2.4.0 + Python 3.11 + CUDA 12.4.1
-# =============================================================
-
-FROM runpod/pytorch:2.6.0-py3.12-cuda12.6.1-devel-ubuntu22.04
+# 2026년 RunPod 표준 태그 중 하나 (Python 3.11, CUDA 12.8.1 사용)
+FROM runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -16,9 +15,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git wget curl ffmpeg \
     libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
-    
-RUN python3 -m pip install --no-cache-dir --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
-RUN python3 -m pip install --no-cache-dir flash-attn --no-build-isolation
+
+# RunPod 베이스에는 이미 PyTorch가 최적화되어 설치되어 있으므로 torch 설치 줄은 과감히 삭제!
+
+# Flash Attention 빌드 시 메모리 초과(OOM) 방지를 위해 MAX_JOBS 설정 필수
+ENV MAX_JOBS=4
+RUN MAX_JOBS=4 pip install --no-cache-dir flash-attn --no-build-isolation
 
 # ── Clone latest ComfyUI ──────────────────────────────────────
 RUN git clone https://github.com/Comfy-Org/ComfyUI.git ${COMFY_DIR}
