@@ -5,7 +5,7 @@
 # Base: runpod/pytorch 2.4.0 + Python 3.11 + CUDA 12.4.1
 # =============================================================
 
-FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+FROM runpod/pytorch:2.6.0-py3.12-cuda12.6.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -17,7 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
     
-RUN python3 -m pip install --no-cache-dir --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+RUN python3 -m pip install --no-cache-dir --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+RUN python3 -m pip install --no-cache-dir flash-attn --no-build-isolation
+
 # ── Clone latest ComfyUI ──────────────────────────────────────
 RUN git clone https://github.com/Comfy-Org/ComfyUI.git ${COMFY_DIR}
 WORKDIR ${COMFY_DIR}
