@@ -72,6 +72,11 @@ RUN mkdir -p ${COMFY_DIR}/custom_nodes/ComfyUI-Frame-Interpolation/vfi_models/ri
     curl -L -A "Mozilla/5.0" -o ${COMFY_DIR}/custom_nodes/ComfyUI-Frame-Interpolation/vfi_models/rife/rife49.pth \
     "https://huggingface.co/Isi99999/Frame_Interpolation_Models/resolve/main/rife49.pth"
 
+RUN sed -i \
+    's|BASE_MODEL_DOWNLOAD_URLS = \[.*\]|BASE_MODEL_DOWNLOAD_URLS = ["https://huggingface.co/Isi99999/Frame_Interpolation_Models/resolve/main/"]|' \
+    ${COMFY_DIR}/custom_nodes/ComfyUI-Frame-Interpolation/vfi_utils.py && \
+    grep "BASE_MODEL_DOWNLOAD_URLS" ${COMFY_DIR}/custom_nodes/ComfyUI-Frame-Interpolation/vfi_utils.py
+
 # ── Config files ──────────────────────────────────────────────
 COPY extra_model_paths.yaml ${COMFY_DIR}/extra_model_paths.yaml
 COPY handler.py /handler.py
