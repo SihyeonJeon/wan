@@ -20,7 +20,7 @@ ENV TORCH_CUDA_ARCH_LIST="9.0"
 # ── System dependencies ──
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git wget curl ffmpeg aria2 \
-    libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev \
+    libgl1 libglib2.0-0 libsm6 libxext6 libxrender-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
