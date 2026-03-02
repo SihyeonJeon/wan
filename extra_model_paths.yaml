@@ -6,7 +6,8 @@ runpod_network_volume:
     clip_vision: clip_vision/
     vae: vae/
     loras: loras/
-    unet: diffusion_models/
+    # unet: 항목 제거 — diffusion_models/ 와 경로가 동일한 중복 매핑이었음.
+    # WAN 2.2는 UNETLoader 노드를 통해 diffusion_models/ 에서 정상 로드됨.
 
 local_cached_volume:
     base_path: /comfyui/models/
