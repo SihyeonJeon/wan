@@ -64,9 +64,9 @@ def start_comfyui():
     # H200 최적화: --highvram 추가, --bf16-unet 추가
     cmd = [
         sys.executable, "main.py", "--listen", "0.0.0.0", "--port", str(COMFY_PORT),
-        "--disable-auto-launch", 
-        "--extra-model-paths-config", f"{COMFY_DIR}/extra_model_paths.yaml", 
-        "--bf16-unet", "--highvram" 
+        "--disable-auto-launch",
+        "--extra-model-paths-config", f"{COMFY_DIR}/extra_model_paths.yaml",
+        "--bf16-unet", "--highvram"
     ]
     comfy_process = subprocess.Popen(cmd, cwd=COMFY_DIR)
 
@@ -109,16 +109,16 @@ def wait_for_execution(prompt_id: str, client_id: str):
 def get_and_upload_outputs(prompt_id: str):
     history = json.loads(urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=30).read())
     outputs = history.get(prompt_id, {}).get("outputs", {})
-    
+
     video_urls = []
     image_results = []
 
     for node_id, node_out in outputs.items():
-        # 1. 비디오/GIF 처리 (기존 로직: Cloudinary 업로드)
+        # 1. 비디오/GIF 처리 (Cloudinary 업로드)
         for vkey in ("videos", "gifs"):
             for vid_info in node_out.get(vkey, []):
                 if vid_info.get("type") == "temp": continue
-                
+
                 fname = vid_info.get("filename", "")
                 subfolder = vid_info.get("subfolder", "")
                 if not fname: continue
@@ -133,16 +133,16 @@ def get_and_upload_outputs(prompt_id: str):
                     upload_preset="n8n insta",
                     chunk_size=6000000
                 )
-                
+
                 video_urls.append({"filename": fname, "url": upload_resp.get("secure_url")})
-                
+
                 try: os.remove(local_file_path)
                 except Exception as e: log(f"Cleanup failed: {e}")
 
-        # 2. 이미지 처리 (추가 로직: n8n으로 전달할 Base64 생성)
+        # 2. 이미지 처리 (n8n으로 전달할 Base64 생성)
         for img_info in node_out.get("images", []):
             if img_info.get("type") == "temp": continue
-            
+
             fname = img_info.get("filename", "")
             subfolder = img_info.get("subfolder", "")
             if not fname: continue
@@ -155,12 +155,11 @@ def get_and_upload_outputs(prompt_id: str):
                 img_bytes = f.read()
                 b64_data = base64.b64encode(img_bytes).decode('utf-8')
 
-            # n8n의 Split Out Images 노드가 요구하는 형태로 배열 구성
             image_results.append({
                 "filename": fname,
                 "data": b64_data
             })
-            
+
             try: os.remove(local_file_path)
             except Exception as e: log(f"Cleanup failed: {e}")
 
@@ -173,36 +172,58 @@ def handler(event: dict) -> dict:
         workflow  = job_input.get("workflow")
         if not workflow: return {"error": "No workflow provided"}
 
-        # n8n에서 넘겨준 이미지 URL 처리 (Node 10 등 맵핑)
+        # n8n에서 넘겨준 이미지 URL 처리
+        # Node ID 하드코딩 대신 class_type 스캔 방식으로 교체.
+        # 페이로드에 node_id가 명시된 경우 해당 노드를 우선 사용하고,
+        # 없으면 워크플로우 전체를 순회하여 LoadImage 노드를 자동 탐색.
         for img_entry in job_input.get("images", []):
             url = img_entry.get("image", "")
-            if url:
-                actual_name = upload_image_to_comfyui(img_entry.get("name", "input_image.png"), url)
-                if "10" in workflow and workflow["10"].get("class_type") == "LoadImage":
-                    workflow["10"]["inputs"]["image"] = actual_name
+            if not url:
+                continue
+
+            actual_name = upload_image_to_comfyui(img_entry.get("name", "input_image.png"), url)
+
+            # 1순위: 페이로드에 node_id가 명시된 경우
+            target_node_id = str(img_entry.get("node_id", ""))
+            if target_node_id and target_node_id in workflow:
+                workflow[target_node_id]["inputs"]["image"] = actual_name
+                log(f"Image mapped to explicit node_id={target_node_id}")
+                continue
+
+            # 2순위: class_type == "LoadImage" 인 첫 번째 노드 자동 탐색
+            matched = False
+            for node_id, node_data in workflow.items():
+                if node_data.get("class_type") == "LoadImage":
+                    workflow[node_id]["inputs"]["image"] = actual_name
+                    log(f"Image mapped to LoadImage node (auto-detected node_id={node_id})")
+                    matched = True
+                    break
+
+            if not matched:
+                log(f"WARNING: No LoadImage node found for image '{img_entry.get('name')}' — skipping.")
 
         client_id = str(uuid.uuid4())
         result = queue_prompt(workflow, client_id)
         prompt_id = result.get("prompt_id")
-        
+
         wait_for_execution(prompt_id, client_id)
-        
+
         # 결과물 가져오기
         video_results, image_results = get_and_upload_outputs(prompt_id)
-        
-        if not video_results and not image_results: 
+
+        if not video_results and not image_results:
             return {"error": "No videos or images generated"}
-        
+
         # n8n을 위한 응답 구성
         response = {"status": "success"}
         if video_results:
             response["video_count"] = len(video_results)
             response["videos"] = video_results
-        
+
         if image_results:
             response["image_count"] = len(image_results)
-            response["images"] = image_results # n8n의 "output.images"로 매핑됨
-            
+            response["images"] = image_results  # n8n의 "output.images"로 매핑됨
+
         return response
 
     except Exception:
