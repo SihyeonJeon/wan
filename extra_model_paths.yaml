@@ -6,6 +6,7 @@ runpod_network_volume:
     clip_vision: clip_vision/
     vae: vae/
     loras: loras/
+    unet: diffusion_models/
 
 local_cached_volume:
     base_path: /comfyui/models/
