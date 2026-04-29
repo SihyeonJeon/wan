@@ -1,15 +1,17 @@
 # ---------------------------------------------------------------
-# wan v3 — extra_model_paths.yaml
+# wan v4 — extra_model_paths.yaml
 # 2026-04-29
-# Declares every model-class path used by the v3 SOTA stack.
+# Declares every model-class path used by the v4 SOTA stack.
+# Volume mount: /workspace/model/  (singular `model` per user spec;
+#                                   v3 used /runpod-volume/models/).
 # Anything ComfyUI would normally search under <comfy>/models/<key>/
 # is also searched under <base_path>/<value>.
 # ---------------------------------------------------------------
 
-runpod_network_volume:
-    base_path: /runpod-volume/models/
+workspace_volume:
+    base_path: /workspace/model/
 
-    # ── Existing (v2) ──
+    # ── Inherited from v3 (path migrated only) ──
     clip: clip/
     diffusion_models: diffusion_models/
     text_encoders: text_encoders/
@@ -17,8 +19,8 @@ runpod_network_volume:
     vae: vae/
     loras: loras/
 
-    # ── v3 additions for SOTA layer-decomp + Illustrious anime stack ──
-    checkpoints: checkpoints/      # SDXL/Illustrious-XL/NoobAI base checkpoints
+    # ── Anime-base + identity + inpaint stack (v3) ──
+    checkpoints: checkpoints/      # SDXL/Illustrious-XL v2.0-stable + JANKU v7.77
     controlnet: controlnet/        # Reference-only / depth / canny CN
     ipadapter: ipadapter/          # cubiq/ComfyUI_IPAdapter_plus weights
     pulid: pulid/                  # cubiq/PuLID_ComfyUI (pulid_v1.1.safetensors)
@@ -30,18 +32,20 @@ runpod_network_volume:
     rmbg: rmbg/                    # 1038lab BEN2/SDMatte/BiRefNet weights
     upscale_models: upscale_models/
 
+    # ── v4 NEW: textual inversion / embeddings ──
+    embeddings: embeddings/        # Lazy Embeddings (lazypos.safetensors,
+                                   # lazyneg.safetensors). ComfyUI core
+                                   # auto-detects via this key.
+
     # WAN 2.2 는 UNETLoader 노드가 diffusion_models/ 에서 정상 로드.
     # `unet:` 별도 키 추가는 중복 매핑이 되므로 의도적으로 생략.
 
 local_cached_volume:
     base_path: /comfyui/models/
 
-    # ── Existing (v2) ──
+    # ── Inherited from v3 ──
     clip: clip/
     diffusion_models: diffusion_models/
-
-    # ── v3 additions (mirrored so anything baked or symlinked into
-    # /comfyui/models/* during start.sh also resolves) ──
     text_encoders: text_encoders/
     clip_vision: clip_vision/
     vae: vae/
@@ -55,3 +59,6 @@ local_cached_volume:
     insightface: insightface/
     rmbg: rmbg/
     upscale_models: upscale_models/
+
+    # ── v4 NEW ──
+    embeddings: embeddings/

@@ -1,10 +1,24 @@
 # =============================================================
-# RunPod Serverless Worker - v3 (2026-04-29)
-# Pipeline: Image Gen (Z-Image utility + Illustrious-XL anime) +
+# RunPod Serverless Worker - v4 (2026-04-29)
+# Pipeline: Image Gen (Z-Image utility + Illustrious-XL v2.0-stable +
+#           JANKU v7.77 anime) +
 #           Layer Decomposition (See-through) + Inpaint
 #           (BrushNet + Inpaint-CropAndStitch) + Identity
-#           (PuLID-SDXL + IP-Adapter Plus) + Video (WAN 2.2 I2V)
+#           (PuLID-SDXL + IP-Adapter Plus) + Video (WAN 2.2 I2V) +
+#           Lazy Embeddings (lazypos/lazyneg textual inversion)
 # GPU Target: NVIDIA H200 (Hopper, HBM3e)
+#
+# v4 changes vs v3:
+#   - NO Dockerfile-level changes required (functionally identical).
+#   - Storage path migration /runpod-volume/models/ → /workspace/model/
+#     is RUNTIME-ONLY (start.sh + extra_model_paths.yaml). The Dockerfile
+#     bakes no host-mount path; the volume is mounted by the RunPod
+#     endpoint config.
+#   - 3 Civitai resources surveyed (Character Sheet LoRA, Z-Image sampler
+#     article, Lazy Embeddings) require no custom-node additions.
+#     Lazy Embeddings is loaded by ComfyUI core (textual inversion
+#     directory under models/embeddings/).
+#   - Tag bumped to v4 for documentation hygiene only.
 # =============================================================
 
 # 1. Base Image: NVIDIA NGC PyTorch — H200/Hopper-tuned, CUDA included.
@@ -28,7 +42,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Flash Attention ──
-# NGC pytorch:25.01 이미지에 flash-attn이 이미 포함되어 있으면 건너뜀.
 ENV MAX_JOBS=8
 RUN python3 -c "import flash_attn; print(f'[build] flash-attn {flash_attn.__version__} already present, skipping install.')" \
     || pip install --no-cache-dir flash-attn \
@@ -36,8 +49,6 @@ RUN python3 -c "import flash_attn; print(f'[build] flash-attn {flash_attn.__vers
        --no-build-isolation
 
 # ── Clone ComfyUI (PINNED to v0.20.1, Apr 27 2026) ──
-# v3 변경: HEAD 클론을 pinned commit 으로 교체. 향후 ComfyUI breaking change 가
-# 빌드를 silently 깨뜨리는 것을 방지. 업그레이드는 아래 ARG/CHECKOUT 한 줄만 수정.
 ARG COMFYUI_REF=64b8457f55cd7fb54ca7a956d9c73b505e903e0c
 RUN git clone https://github.com/Comfy-Org/ComfyUI.git ${COMFY_DIR} \
     && cd ${COMFY_DIR} \
@@ -50,20 +61,16 @@ RUN git clone https://github.com/Comfy-Org/ComfyUI.git ${COMFY_DIR} \
 WORKDIR ${COMFY_DIR}
 
 # ── Core & Serverless Dependencies ──
-# [최적화 3] requirements + RunPod 종속성 단일 RUN.
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir \
     runpod websocket-client requests Pillow "imageio[ffmpeg]" av typing_extensions cloudinary
 
 # ── Custom Nodes ──
-# [v3] 6 new nodes added for the layer-decomp + Illustrious anime stack:
-#   - jtydhr88/ComfyUI-See-through         (LayerDiff 3D + Marigold; layer split)
-#   - 1038lab/ComfyUI-RMBG                 (BEN2/SDMatte/SAM2/SAM3/GroundingDINO; alpha refine)
-#   - lquesada/ComfyUI-Inpaint-CropAndStitch (zero-drift inpaint wrapper; mandatory)
-#   - nullquant/ComfyUI-BrushNet           (BrushNet + PowerPaint v2; SDXL inpaint)
-#   - cubiq/PuLID_ComfyUI                  (PuLID-SDXL identity anchor)
-#   - cubiq/ComfyUI_IPAdapter_plus         (IP-Adapter Plus; reference-style anchor)
-# 각 노드의 requirements.txt 가 있으면 자동 설치.
+# v4: No new nodes vs v3. The 3 Civitai resources surveyed for v4 either
+# (a) need no node (Lazy Embeddings is core textual inversion), or
+# (b) provide no download (Z-Image sampler article is informational), or
+# (c) are SKIP-verdict (Character Design Sheet LoRA is out-of-scope for
+#     a decomposition pipeline).
 RUN cd custom_nodes \
     && git clone https://github.com/rgthree/rgthree-comfy.git \
     && git clone https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git \
@@ -94,10 +101,6 @@ RUN cd custom_nodes \
          cat /tmp/frame_interp_install.log; }
 
 # ── Aggregated SOTA-stack pip deps (belt-and-suspenders) ──
-# 일부 노드가 requirements.txt 없이 pyproject 만 두는 경우 (예: cubiq/IPAdapter_plus,
-# lquesada/Inpaint-CropAndStitch) 위 loop 가 그 deps 를 놓칠 수 있다. 명시적으로
-# 한 번 더 pin-free 설치하여 cold-start ImportError 를 예방.
-# 출처: 각 repo 의 README + pyproject 검사 (2026-04-29 WebFetch).
 RUN pip install --no-cache-dir \
     "diffusers>=0.29.0" \
     "accelerate>=0.29.0,<0.32.0" \

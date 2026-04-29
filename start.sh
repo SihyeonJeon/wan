@@ -1,10 +1,13 @@
 #!/bin/bash
 set -e
 
-echo "[startup] H200 Worker v3 init (image+layer-decomp+inpaint+identity+video)"
+echo "[startup] H200 Worker v4 init (image+layer-decomp+inpaint+identity+video+embeddings)"
 
 # ── 0. Constants ──────────────────────────────────────────────
-NET_VOL="/runpod-volume/models"
+# v4: volume mount migrated from /runpod-volume/models to /workspace/model
+#     (singular `model` per user spec). Variable name `NET_VOL` kept for
+#     minimal diff vs v3; the value is what changed.
+NET_VOL="/workspace/model"
 LOCAL_MODELS="/comfyui/models"
 SEETHROUGH_NODE_DIR="/comfyui/custom_nodes/ComfyUI-See-through"
 
@@ -19,13 +22,13 @@ else
     echo "[startup] ✗ WARNING: rife49.pth not found at $BAKED_RIFE — frame interp will fail."
 fi
 
-# ── 2. Network volume binding ─────────────────────────────────
+# ── 2. Workspace volume binding ───────────────────────────────
 if [ ! -d "$NET_VOL" ]; then
-    echo "[startup] ✗ WARNING: /runpod-volume/models NOT mounted! Continuing without volume."
+    echo "[startup] ✗ WARNING: /workspace/model NOT mounted! Continuing without volume."
     exec python3 -u /handler.py
 fi
 
-echo "[startup] ✓ Network volume mounted."
+echo "[startup] ✓ Workspace volume mounted at $NET_VOL."
 
 # ── 2a. Ensure all volume-side dirs exist (idempotent) ────────
 # A fresh / partially-populated volume must not crash the worker.
@@ -36,15 +39,16 @@ mkdir -p "$NET_VOL/text_encoders"
 mkdir -p "$NET_VOL/clip_vision"
 mkdir -p "$NET_VOL/vae"
 mkdir -p "$NET_VOL/loras"
-mkdir -p "$NET_VOL/checkpoints"        # v3: SDXL/Illustrious base
-mkdir -p "$NET_VOL/controlnet"         # v3: reference-only / depth CN
-mkdir -p "$NET_VOL/ipadapter"          # v3: IP-Adapter Plus SDXL
-mkdir -p "$NET_VOL/pulid"              # v3: PuLID-SDXL
-mkdir -p "$NET_VOL/inpaint"            # v3: BrushNet (per its README)
-mkdir -p "$NET_VOL/insightface"        # v3: PuLID antelopev2
-mkdir -p "$NET_VOL/rmbg"               # v3: BEN2/SDMatte/BiRefNet
-mkdir -p "$NET_VOL/seethrough"         # v3: LayerDiff3D + Marigold
+mkdir -p "$NET_VOL/checkpoints"        # SDXL/Illustrious-XL v2.0-stable + JANKU v7.77
+mkdir -p "$NET_VOL/controlnet"         # reference-only / depth CN
+mkdir -p "$NET_VOL/ipadapter"          # IP-Adapter Plus SDXL
+mkdir -p "$NET_VOL/pulid"              # PuLID-SDXL v1.1
+mkdir -p "$NET_VOL/inpaint"            # BrushNet (per its README)
+mkdir -p "$NET_VOL/insightface"        # PuLID antelopev2
+mkdir -p "$NET_VOL/rmbg"               # BEN2/SDMatte/BiRefNet
+mkdir -p "$NET_VOL/seethrough"         # LayerDiff3D + Marigold
 mkdir -p "$NET_VOL/upscale_models"     # forward-compat
+mkdir -p "$NET_VOL/embeddings"         # v4 NEW: Lazy Embeddings
 
 # ── 2b. Ensure local mount points exist ───────────────────────
 mkdir -p "$LOCAL_MODELS/diffusion_models"
@@ -57,8 +61,9 @@ mkdir -p "$LOCAL_MODELS/inpaint"
 mkdir -p "$LOCAL_MODELS/insightface"
 mkdir -p "$LOCAL_MODELS/rmbg"
 mkdir -p "$LOCAL_MODELS/SeeThrough"
+mkdir -p "$LOCAL_MODELS/embeddings"     # v4 NEW
 
-# ── 3. Symlinks: per-file (existing v2 behavior) ──────────────
+# ── 3. Symlinks: per-file (v2/v3 carryover) ───────────────────
 echo "[startup] ⚡ Symlinking heavy models (no NVMe copy)..."
 
 # [video] WAN 2.2 UNET
@@ -79,33 +84,35 @@ else
     echo "[startup] ✗ WARNING: umt5_xxl_fp16.safetensors not found in volume."
 fi
 
-# ── 4. Symlinks: per-directory (v3) ───────────────────────────
-# 큰 카테고리는 디렉토리 단위로 묶어서 link.
-# 새 weight 가 추가될 때마다 start.sh 를 수정할 필요가 없음.
-# `ln -sfn` (-n: 기존 symlink 가 dir 일 때 traversal 방지) 사용.
+# ── 4. Symlinks: per-directory (v3 + v4) ──────────────────────
+# Big categories use directory-level symlinks so that newly-added
+# .safetensors files become available without start.sh edits.
+# `ln -sfn` (-n: prevent traversal when target is a dir) is used.
 
-# v3: Illustrious-XL + 다른 SDXL checkpoints
+# Anime SDXL checkpoints (Illustrious-XL v2.0-stable + JANKU v7.77 + others)
 ln -sfn "$NET_VOL/checkpoints" "$LOCAL_MODELS/checkpoints_volume"
-# Note: extra_model_paths.yaml 의 `checkpoints: checkpoints/` 매핑이 NET_VOL 의
-# checkpoints 를 직접 보게 하므로 추가 symlink 는 보조 채널일 뿐.
 
-# v3: PuLID-SDXL weights
+# PuLID-SDXL v1.1 weights
 ln -sfn "$NET_VOL/pulid" "$LOCAL_MODELS/pulid_volume"
 
-# v3: IP-Adapter weights
+# IP-Adapter Plus SDXL weights
 ln -sfn "$NET_VOL/ipadapter" "$LOCAL_MODELS/ipadapter_volume"
 
-# v3: BrushNet weights (BrushNet 노드는 models/inpaint 를 본다)
+# BrushNet weights (BrushNet 노드는 models/inpaint 를 본다)
 ln -sfn "$NET_VOL/inpaint" "$LOCAL_MODELS/inpaint_volume"
 
-# v3: ControlNet
+# ControlNet
 ln -sfn "$NET_VOL/controlnet" "$LOCAL_MODELS/controlnet_volume"
 
-# v3: InsightFace (PuLID antelopev2)
+# InsightFace (PuLID antelopev2)
 ln -sfn "$NET_VOL/insightface" "$LOCAL_MODELS/insightface_volume"
 
-# v3: RMBG / BEN2 / SDMatte / SAM2 / SAM3 / GroundingDINO
+# RMBG / BEN2 / SDMatte / SAM2 / SAM3 / GroundingDINO
 ln -sfn "$NET_VOL/rmbg" "$LOCAL_MODELS/rmbg_volume"
+
+# v4 NEW: Lazy Embeddings (textual inversion)
+# ComfyUI core resolves embeddings via models/embeddings/ — bind the volume.
+ln -sfn "$NET_VOL/embeddings" "$LOCAL_MODELS/embeddings_volume"
 
 # ── 5. See-through node-internal model dirs ───────────────────
 # jtydhr88/ComfyUI-See-through 의 README:
@@ -135,7 +142,7 @@ if [ -d "$NET_VOL/seethrough/marigold" ]; then
     ln -sfn "$NET_VOL/seethrough/marigold" "$SEETHROUGH_NODE_DIR/models/marigold"
 fi
 
-echo "[startup] ✓ v3 symlinks complete."
+echo "[startup] ✓ v4 symlinks complete."
 
 # ── 6. Launch ─────────────────────────────────────────────────
 echo "[startup] Starting handler.py ..."
