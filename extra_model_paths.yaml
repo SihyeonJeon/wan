@@ -1,15 +1,57 @@
+# ---------------------------------------------------------------
+# wan v3 — extra_model_paths.yaml
+# 2026-04-29
+# Declares every model-class path used by the v3 SOTA stack.
+# Anything ComfyUI would normally search under <comfy>/models/<key>/
+# is also searched under <base_path>/<value>.
+# ---------------------------------------------------------------
+
 runpod_network_volume:
     base_path: /runpod-volume/models/
+
+    # ── Existing (v2) ──
     clip: clip/
     diffusion_models: diffusion_models/
     text_encoders: text_encoders/
     clip_vision: clip_vision/
     vae: vae/
     loras: loras/
-    # unet: 항목 제거 — diffusion_models/ 와 경로가 동일한 중복 매핑이었음.
-    # WAN 2.2는 UNETLoader 노드를 통해 diffusion_models/ 에서 정상 로드됨.
+
+    # ── v3 additions for SOTA layer-decomp + Illustrious anime stack ──
+    checkpoints: checkpoints/      # SDXL/Illustrious-XL/NoobAI base checkpoints
+    controlnet: controlnet/        # Reference-only / depth / canny CN
+    ipadapter: ipadapter/          # cubiq/ComfyUI_IPAdapter_plus weights
+    pulid: pulid/                  # cubiq/PuLID_ComfyUI (pulid_v1.1.safetensors)
+    inpaint: inpaint/              # nullquant/ComfyUI-BrushNet weights
+                                   # (its README says place .safetensors in models/inpaint/)
+    seethrough: seethrough/        # forward-compat; jtydhr88 default is models/SeeThrough/
+                                   # — see start.sh symlink for actual binding
+    insightface: insightface/      # PuLID-SDXL antelopev2 face encoder
+    rmbg: rmbg/                    # 1038lab BEN2/SDMatte/BiRefNet weights
+    upscale_models: upscale_models/
+
+    # WAN 2.2 는 UNETLoader 노드가 diffusion_models/ 에서 정상 로드.
+    # `unet:` 별도 키 추가는 중복 매핑이 되므로 의도적으로 생략.
 
 local_cached_volume:
     base_path: /comfyui/models/
+
+    # ── Existing (v2) ──
     clip: clip/
     diffusion_models: diffusion_models/
+
+    # ── v3 additions (mirrored so anything baked or symlinked into
+    # /comfyui/models/* during start.sh also resolves) ──
+    text_encoders: text_encoders/
+    clip_vision: clip_vision/
+    vae: vae/
+    loras: loras/
+    checkpoints: checkpoints/
+    controlnet: controlnet/
+    ipadapter: ipadapter/
+    pulid: pulid/
+    inpaint: inpaint/
+    seethrough: seethrough/
+    insightface: insightface/
+    rmbg: rmbg/
+    upscale_models: upscale_models/

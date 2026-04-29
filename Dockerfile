@@ -1,10 +1,13 @@
 # =============================================================
-# RunPod Serverless Worker - Optimized for H200 (Hopper)
-# Pipeline: Image Generation (n8n Base64) + Video (WAN 2.2 I2V)
-# GPU Target: NVIDIA H200
+# RunPod Serverless Worker - v3 (2026-04-29)
+# Pipeline: Image Gen (Z-Image utility + Illustrious-XL anime) +
+#           Layer Decomposition (See-through) + Inpaint
+#           (BrushNet + Inpaint-CropAndStitch) + Identity
+#           (PuLID-SDXL + IP-Adapter Plus) + Video (WAN 2.2 I2V)
+# GPU Target: NVIDIA H200 (Hopper, HBM3e)
 # =============================================================
 
-# 1. Base Image: H200의 성능(HBM3e, Hopper 아키텍처)을 완벽히 지원하는 NVIDIA NGC 공식 이미지 사용
+# 1. Base Image: NVIDIA NGC PyTorch — H200/Hopper-tuned, CUDA included.
 FROM nvcr.io/nvidia/pytorch:25.01-py3
 
 # ── H200 & Serverless 전용 환경 변수 ──
@@ -12,9 +15,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV COMFY_DIR=/comfyui
 
-# [최적화 1] Serverless 콜드스타트 부팅 속도 향상을 위한 CUDA 지연 로딩
+# [최적화 1] Serverless 콜드스타트 부팅 속도 향상을 위한 CUDA 지연 로딩.
 ENV CUDA_MODULE_LOADING=LAZY
-# [최적화 2] H200(Hopper) 아키텍처 전용 타겟팅. 빌드 속도 단축 및 타겟 최적화.
+# [최적화 2] H200(Hopper) 아키텍처 전용 타겟팅. 빌드 속도 단축.
 ENV TORCH_CUDA_ARCH_LIST="9.0"
 
 # ── System dependencies ──
@@ -24,28 +27,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Flash Attention 설치 ──
-# NGC pytorch:25.01 이미지에 flash-attn이 이미 포함되어 있는지 확인 후 미포함 시만 설치
-# 사전 빌드 wheel을 우선 탐색하여 소스 컴파일을 회피함으로써 빌드 시간을 대폭 단축
+# ── Flash Attention ──
+# NGC pytorch:25.01 이미지에 flash-attn이 이미 포함되어 있으면 건너뜀.
 ENV MAX_JOBS=8
-RUN python3 -c "import flash_attn; print(f'[build] flash-attn {flash_attn.__version__} already present in base image, skipping install.')" \
+RUN python3 -c "import flash_attn; print(f'[build] flash-attn {flash_attn.__version__} already present, skipping install.')" \
     || pip install --no-cache-dir flash-attn \
        --find-links https://github.com/Dao-AILab/flash-attention/releases \
        --no-build-isolation
 
-# ── Clone latest ComfyUI ──
-RUN git clone https://github.com/Comfy-Org/ComfyUI.git ${COMFY_DIR}
+# ── Clone ComfyUI (PINNED to v0.20.1, Apr 27 2026) ──
+# v3 변경: HEAD 클론을 pinned commit 으로 교체. 향후 ComfyUI breaking change 가
+# 빌드를 silently 깨뜨리는 것을 방지. 업그레이드는 아래 ARG/CHECKOUT 한 줄만 수정.
+ARG COMFYUI_REF=64b8457f55cd7fb54ca7a956d9c73b505e903e0c
+RUN git clone https://github.com/Comfy-Org/ComfyUI.git ${COMFY_DIR} \
+    && cd ${COMFY_DIR} \
+    && (git checkout ${COMFYUI_REF} 2>/dev/null \
+        || (echo "[build] WARN: ${COMFYUI_REF} not found on Comfy-Org fork; falling back to upstream comfyanonymous." \
+            && git remote add upstream https://github.com/comfyanonymous/ComfyUI.git \
+            && git fetch upstream \
+            && git checkout ${COMFYUI_REF})) \
+    && echo "[build] ✓ ComfyUI pinned to $(git rev-parse HEAD)"
 WORKDIR ${COMFY_DIR}
 
 # ── Core & Serverless Dependencies ──
-# [최적화 3] Requirements와 RunPod 종속성을 한 번의 RUN으로 묶어 이미지 레이어 수 감소
+# [최적화 3] requirements + RunPod 종속성 단일 RUN.
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir \
     runpod websocket-client requests Pillow "imageio[ffmpeg]" av typing_extensions cloudinary
 
 # ── Custom Nodes ──
-# [최적화 4] 여러 번의 RUN을 단일 RUN으로 병합하고 반복문으로 requirements를 한 번에 처리
-# install.py 실패 시 조용히 무시하지 않고 로그를 남겨 런타임 오류를 빌드 시점에 조기 발견
+# [v3] 6 new nodes added for the layer-decomp + Illustrious anime stack:
+#   - jtydhr88/ComfyUI-See-through         (LayerDiff 3D + Marigold; layer split)
+#   - 1038lab/ComfyUI-RMBG                 (BEN2/SDMatte/SAM2/SAM3/GroundingDINO; alpha refine)
+#   - lquesada/ComfyUI-Inpaint-CropAndStitch (zero-drift inpaint wrapper; mandatory)
+#   - nullquant/ComfyUI-BrushNet           (BrushNet + PowerPaint v2; SDXL inpaint)
+#   - cubiq/PuLID_ComfyUI                  (PuLID-SDXL identity anchor)
+#   - cubiq/ComfyUI_IPAdapter_plus         (IP-Adapter Plus; reference-style anchor)
+# 각 노드의 requirements.txt 가 있으면 자동 설치.
 RUN cd custom_nodes \
     && git clone https://github.com/rgthree/rgthree-comfy.git \
     && git clone https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git \
@@ -55,6 +73,12 @@ RUN cd custom_nodes \
     && git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git \
     && git clone https://github.com/wallen0322/ComfyUI-Wan22FMLF.git \
     && git clone https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git \
+    && git clone https://github.com/jtydhr88/ComfyUI-See-through.git \
+    && git clone https://github.com/1038lab/ComfyUI-RMBG.git \
+    && git clone https://github.com/lquesada/ComfyUI-Inpaint-CropAndStitch.git \
+    && git clone https://github.com/nullquant/ComfyUI-BrushNet.git \
+    && git clone https://github.com/cubiq/PuLID_ComfyUI.git \
+    && git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus.git \
     && for dir in */ ; do \
          if [ -f "$dir/requirements.txt" ]; then \
            echo "[build] Installing requirements for $dir..." ; \
@@ -69,9 +93,37 @@ RUN cd custom_nodes \
     || { echo "[build] ✗ WARNING: ComfyUI-Frame-Interpolation install.py FAILED"; \
          cat /tmp/frame_interp_install.log; }
 
+# ── Aggregated SOTA-stack pip deps (belt-and-suspenders) ──
+# 일부 노드가 requirements.txt 없이 pyproject 만 두는 경우 (예: cubiq/IPAdapter_plus,
+# lquesada/Inpaint-CropAndStitch) 위 loop 가 그 deps 를 놓칠 수 있다. 명시적으로
+# 한 번 더 pin-free 설치하여 cold-start ImportError 를 예방.
+# 출처: 각 repo 의 README + pyproject 검사 (2026-04-29 WebFetch).
+RUN pip install --no-cache-dir \
+    "diffusers>=0.29.0" \
+    "accelerate>=0.29.0,<0.32.0" \
+    "peft>=0.7.0" \
+    "transformers>=4.30.0" \
+    "huggingface-hub>=0.19.0" \
+    "opencv-python>=4.7.0" \
+    "scikit-learn>=1.0.0" \
+    "matplotlib" \
+    "bitsandbytes>=0.49.2" \
+    "transparent-background>=1.1.2" \
+    "segment-anything>=1.0" \
+    "groundingdino-py>=0.4.0" \
+    "onnxruntime>=1.15.0" \
+    "onnxruntime-gpu>=1.15.0" \
+    "protobuf>=3.20.2,<6.0.0" \
+    "hydra-core>=1.3.0" \
+    "omegaconf>=2.3.0" \
+    "iopath>=0.1.9" \
+    "decord" \
+    "ftfy" \
+    "facexlib" \
+    "insightface" \
+    "timm"
+
 # ── RIFE 4.9 Baking ──
-# RIFE 모델은 네트워크 볼륨에 없으므로 이미지에 포함.
-# vfi_utils.py URL 패치는 rife49.pth가 이미 존재하면 다운로드 트리거 자체가 발생하지 않으므로 불필요하여 제거.
 RUN mkdir -p custom_nodes/ComfyUI-Frame-Interpolation/vfi_models/rife \
     && curl -L -A "Mozilla/5.0" -o custom_nodes/ComfyUI-Frame-Interpolation/vfi_models/rife/rife49.pth \
     "https://huggingface.co/Isi99999/Frame_Interpolation_Models/resolve/main/rife49.pth" \
@@ -86,6 +138,6 @@ COPY handler.py /handler.py
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
-# ── Verify ──
+# ── Entrypoint ──
 WORKDIR /
 CMD ["/start.sh"]

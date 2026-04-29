@@ -21,13 +21,33 @@ COMFY_DIR  = os.environ.get("COMFY_DIR", "/comfyui")
 STARTUP_TIMEOUT   = int(os.environ.get("STARTUP_TIMEOUT", 300))
 EXECUTION_TIMEOUT = int(os.environ.get("EXECUTION_TIMEOUT", 2400))
 
-# ── Cloudinary 하드코딩 설정 ──────────────────────────────────
-cloudinary.config(
-    cloud_name="dp2azbanc",
-    api_key="132448188878379",
-    api_secret="uKoaFbyATfGBdc1RdihQqhwySvE",
-    secure=True
-)
+# ── Cloudinary credentials ────────────────────────────────────
+# Cloudinary credentials are read from env vars set on the RunPod
+# endpoint config; never hardcoded for public docker push.
+# Required env vars (configure in RunPod web UI → endpoint → Environment Variables):
+#   RUNPOD_CLOUDINARY_CLOUD_NAME
+#   RUNPOD_CLOUDINARY_API_KEY
+#   RUNPOD_CLOUDINARY_API_SECRET
+#   RUNPOD_CLOUDINARY_UPLOAD_PRESET   (e.g. "n8n insta")
+# If any of the four are missing, video-upload paths will hard-fail
+# with a clear message (image-only workflows still work).
+_CLD_CLOUD       = os.environ.get("RUNPOD_CLOUDINARY_CLOUD_NAME", "")
+_CLD_KEY         = os.environ.get("RUNPOD_CLOUDINARY_API_KEY", "")
+_CLD_SECRET      = os.environ.get("RUNPOD_CLOUDINARY_API_SECRET", "")
+CLOUDINARY_UPLOAD_PRESET = os.environ.get("RUNPOD_CLOUDINARY_UPLOAD_PRESET", "n8n insta")
+
+CLOUDINARY_ENABLED = bool(_CLD_CLOUD and _CLD_KEY and _CLD_SECRET)
+
+if CLOUDINARY_ENABLED:
+    cloudinary.config(
+        cloud_name=_CLD_CLOUD,
+        api_key=_CLD_KEY,
+        api_secret=_CLD_SECRET,
+        secure=True,
+    )
+else:
+    # Image-only workflows do not need Cloudinary; only warn.
+    print("[handler] WARN: Cloudinary env vars missing — video upload disabled.", flush=True)
 
 comfy_process = None
 
@@ -105,7 +125,7 @@ def wait_for_execution(prompt_id: str, client_id: str):
     finally:
         ws.close()
 
-# ── Output Processing (Video to Cloudinary, Image to Base64) ──
+# ── Output Processing (Video → Cloudinary, Image → Base64) ────
 def get_and_upload_outputs(prompt_id: str):
     history = json.loads(urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=30).read())
     outputs = history.get(prompt_id, {}).get("outputs", {})
@@ -114,7 +134,7 @@ def get_and_upload_outputs(prompt_id: str):
     image_results = []
 
     for node_id, node_out in outputs.items():
-        # 1. 비디오/GIF 처리 (Cloudinary 업로드)
+        # 1. Video / GIF processing (Cloudinary upload).
         for vkey in ("videos", "gifs"):
             for vid_info in node_out.get(vkey, []):
                 if vid_info.get("type") == "temp": continue
@@ -126,11 +146,15 @@ def get_and_upload_outputs(prompt_id: str):
                 local_file_path = os.path.join(COMFY_DIR, "output", subfolder, fname)
                 if not os.path.exists(local_file_path): continue
 
-                log(f"Uploading Video to Cloudinary [Preset: n8n insta]: {fname}")
+                if not CLOUDINARY_ENABLED:
+                    log(f"⚠ Skipping video upload (Cloudinary disabled): {fname}")
+                    continue
+
+                log(f"Uploading Video to Cloudinary [Preset: {CLOUDINARY_UPLOAD_PRESET}]: {fname}")
                 upload_resp = cloudinary.uploader.upload(
                     local_file_path,
                     resource_type="video",
-                    upload_preset="n8n insta",
+                    upload_preset=CLOUDINARY_UPLOAD_PRESET,
                     chunk_size=6000000
                 )
 
@@ -139,7 +163,7 @@ def get_and_upload_outputs(prompt_id: str):
                 try: os.remove(local_file_path)
                 except Exception as e: log(f"Cleanup failed: {e}")
 
-        # 2. 이미지 처리 (n8n으로 전달할 Base64 생성)
+        # 2. Image processing (base64 for n8n / direct return).
         for img_info in node_out.get("images", []):
             if img_info.get("type") == "temp": continue
 
@@ -172,10 +196,7 @@ def handler(event: dict) -> dict:
         workflow  = job_input.get("workflow")
         if not workflow: return {"error": "No workflow provided"}
 
-        # n8n에서 넘겨준 이미지 URL 처리
-        # Node ID 하드코딩 대신 class_type 스캔 방식으로 교체.
-        # 페이로드에 node_id가 명시된 경우 해당 노드를 우선 사용하고,
-        # 없으면 워크플로우 전체를 순회하여 LoadImage 노드를 자동 탐색.
+        # Image URL staging — explicit node_id wins, else first LoadImage.
         for img_entry in job_input.get("images", []):
             url = img_entry.get("image", "")
             if not url:
@@ -183,14 +204,12 @@ def handler(event: dict) -> dict:
 
             actual_name = upload_image_to_comfyui(img_entry.get("name", "input_image.png"), url)
 
-            # 1순위: 페이로드에 node_id가 명시된 경우
             target_node_id = str(img_entry.get("node_id", ""))
             if target_node_id and target_node_id in workflow:
                 workflow[target_node_id]["inputs"]["image"] = actual_name
                 log(f"Image mapped to explicit node_id={target_node_id}")
                 continue
 
-            # 2순위: class_type == "LoadImage" 인 첫 번째 노드 자동 탐색
             matched = False
             for node_id, node_data in workflow.items():
                 if node_data.get("class_type") == "LoadImage":
@@ -208,13 +227,11 @@ def handler(event: dict) -> dict:
 
         wait_for_execution(prompt_id, client_id)
 
-        # 결과물 가져오기
         video_results, image_results = get_and_upload_outputs(prompt_id)
 
         if not video_results and not image_results:
             return {"error": "No videos or images generated"}
 
-        # n8n을 위한 응답 구성
         response = {"status": "success"}
         if video_results:
             response["video_count"] = len(video_results)
@@ -222,7 +239,7 @@ def handler(event: dict) -> dict:
 
         if image_results:
             response["image_count"] = len(image_results)
-            response["images"] = image_results  # n8n의 "output.images"로 매핑됨
+            response["images"] = image_results
 
         return response
 
