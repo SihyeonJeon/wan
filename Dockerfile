@@ -101,7 +101,12 @@ RUN cd custom_nodes \
          cat /tmp/frame_interp_install.log; }
 
 # ── Aggregated SOTA-stack pip deps (belt-and-suspenders) ──
+# NGC pytorch:25.01-py3 ships Python 3.12 + a pip config that may point at NVIDIA's
+# internal index which does NOT host onnxruntime-gpu. We add an explicit PyPI fallback
+# via --extra-index-url so pip can resolve onnxruntime-gpu from the public index.
+# Min version bumped to 1.18.0 (first release with full Python 3.12 cp312 wheels).
 RUN pip install --no-cache-dir \
+    --extra-index-url https://pypi.org/simple/ \
     "diffusers>=0.29.0" \
     "accelerate>=0.29.0,<0.32.0" \
     "peft>=0.7.0" \
@@ -114,8 +119,7 @@ RUN pip install --no-cache-dir \
     "transparent-background>=1.1.2" \
     "segment-anything>=1.0" \
     "groundingdino-py>=0.4.0" \
-    "onnxruntime>=1.15.0" \
-    "onnxruntime-gpu>=1.15.0" \
+    "onnxruntime-gpu>=1.18.0" \
     "protobuf>=3.20.2,<6.0.0" \
     "hydra-core>=1.3.0" \
     "omegaconf>=2.3.0" \
